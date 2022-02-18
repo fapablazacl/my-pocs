@@ -1,17 +1,14 @@
 
 #include <stdio.h>
 #include <atari.h>
+#include <_antic.h>
+#include <_gtia.h>
+
 
 int main() {
-    char ch;
-    char buffer[16];
-
-    for (ch = 0; ch<126; ch++) {
-        printf("%d  %c\n", (int)ch, ch);
-    }
+    _graphics(12 + 16);
     
-    scanf("%s", buffer);
-    printf("Hello, %s! \n", buffer);
+    while (0 == 0) {}
     
     return 0;
 }

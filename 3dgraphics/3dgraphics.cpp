@@ -96,14 +96,26 @@ GLuint createTriangleMeshVAO(const GLuint program) {
 
     const std::array<glm::vec3, 3> vertices {
         glm::vec3{0.0f, 1.0f, 0.0f},
-        glm::vec3{1.0f, 0.0f, 0.0f},
-        glm::vec3{-1.0f, 0.0f, 0.0f},
+        glm::vec3{1.0f, -1.0f, 0.0f},
+        glm::vec3{-1.0f, -1.0f, 0.0f},
+    };
+
+    const std::array<glm::vec4, 3> colors {
+        glm::vec4{1.0f, 0.0f, 0.0f, 1.0f},
+        glm::vec4{0.0f, 1.0f, 0.0f, 1.0f},
+        glm::vec4{0.0f, 0.0f, 1.0f, 1.0f},
     };
 
     const GLuint coordBuffer = createBuffer(
         GL_ARRAY_BUFFER, 
         sizeof(glm::vec3) * vertices.size(), 
         vertices.data(), GL_STATIC_DRAW
+    );
+
+    const GLuint colorBuffer = createBuffer(
+        GL_ARRAY_BUFFER, 
+        sizeof(glm::vec4) * colors.size(), 
+        colors.data(), GL_STATIC_DRAW
     );
 
     assert(coordBuffer);
@@ -116,9 +128,16 @@ GLuint createTriangleMeshVAO(const GLuint program) {
     const GLint vertCoord = glGetAttribLocation(program, "vertCoord");
     assert(vertCoord >= 0);
 
+    const GLint vertColor = glGetAttribLocation(program, "vertColor");
+    assert(vertColor >= 0);
+
     glEnableVertexAttribArray(vertCoord);
     glBindBuffer(GL_ARRAY_BUFFER, coordBuffer);
     glVertexAttribPointer(vertCoord, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+
+    glEnableVertexAttribArray(vertColor);
+    glBindBuffer(GL_ARRAY_BUFFER, colorBuffer);
+    glVertexAttribPointer(vertColor, 4, GL_FLOAT, GL_FALSE, 0, nullptr);
 
     glBindVertexArray(0);
 
@@ -261,7 +280,7 @@ int main(int argc, char **argv) {
             running = false;
         }
 
-        glClearColor(0.2f, 0.2f, 0.8f, 1.0f);
+        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         glUseProgram(program);
