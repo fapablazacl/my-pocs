@@ -28,7 +28,7 @@ void main() {
     vec3 normal = vertNormal;
 
     // compute the diffuse factor contribution, per vertex
-    float d = abs(dot(uLightDirection, normal));
+    float d = max(dot(uLightDirection, normal), 0.0);
 
     vec4 ambient = uMaterialAmbient * uLightAmbient;
     vec4 diffuse = uMaterialDiffuse * uLightDiffuse * d;
