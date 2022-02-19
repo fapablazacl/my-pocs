@@ -139,6 +139,12 @@ Material createMaterial(const aiMaterial *aimaterial) {
     aimaterial->GetTexture(aiTextureType_SPECULAR, 0, &specularTextureFilePath);
     aimaterial->GetTexture(aiTextureType_HEIGHT, 0, &heightTextureFilePath);
     
+    std::cout << aimaterial->GetName().C_Str() << std::endl;
+    std::cout << "    " << diffuseTextureFilePath.C_Str() << std::endl;
+    std::cout << "    " << diffuseTextureFilePath.C_Str() << std::endl;
+    std::cout << "    " << specularTextureFilePath.C_Str() << std::endl;
+    std::cout << "    " << heightTextureFilePath.C_Str() << std::endl;
+    
     // TODO: perform texture loader via a texture manager
     
     return material;
