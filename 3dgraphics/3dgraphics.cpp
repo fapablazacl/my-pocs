@@ -173,8 +173,8 @@ struct Material {
 
 
 struct Light {
-    glm::vec3 direction = glm::normalize(glm::vec3{0.5f, -1.0f, 0.25f});
-    glm::vec4 ambient = {0.2f, 0.2f, 0.2f, 1.0f};
+    glm::vec3 direction = glm::normalize(glm::vec3{0.5f, 1.0f, 0.25f});
+    glm::vec4 ambient = {0.6f, 0.6f, 0.6f, 1.0f};
     glm::vec4 diffuse = {0.8f, 0.8f, 0.8f, 0.8f};
 };
 
@@ -419,11 +419,16 @@ Material createMaterial(const std::string &parentPath, TextureRepository &textur
         
         std::string filePath = join(split(std::string{fileName.C_Str()}, "\\"), "/");
         
-        if (! can_be_opened(filePath)) {
-            std::string textureFilePath = filePath;
-            std::string textureParentPath = parent_path(filePath);
-            
-            filePath = replace_all(filePath, parent_path(filePath), parentPath);
+        if (filePath[0] == '/') {
+            if (! can_be_opened(filePath)) {
+                std::string textureFilePath = filePath;
+                std::string textureParentPath = parent_path(filePath);
+                
+                filePath = replace_all(filePath, parent_path(filePath), parentPath);
+            }
+        }
+        else {
+            filePath = parentPath + filePath;
         }
         
         assert(can_be_opened(filePath));
@@ -462,6 +467,7 @@ struct ShaderLocationMap {
     GLint uView = -1;
     GLint uProj = -1;
     
+    GLint uMaterialDiffuseSamplerEnable = -1;
     GLint uMaterialDiffuseSampler = -1;
     GLint uMaterialAmbient = -1;
     GLint uMaterialDiffuse = -1;
@@ -487,6 +493,7 @@ ShaderLocationMap createShaderLocationMap(const GLuint program) {
     location.uView = glGetUniformLocation(program, "uView");
     location.uProj = glGetUniformLocation(program, "uProj");
     
+    location.uMaterialDiffuseSamplerEnable = glGetUniformLocation(program, "uMaterialDiffuseSamplerEnable");
     location.uMaterialDiffuseSampler = glGetUniformLocation(program, "uMaterialDiffuseSampler");
     location.uMaterialAmbient = glGetUniformLocation(program, "uMaterialAmbient");
     location.uMaterialDiffuse = glGetUniformLocation(program, "uMaterialDiffuse");
@@ -862,10 +869,12 @@ int main(int argc, char **argv) {
             if (material.diffuseTexture) {
                 glActiveTexture(GL_TEXTURE0 + 0);
                 glBindTexture(GL_TEXTURE_2D, material.diffuseTexture);
+                glUniform1f(location.uMaterialDiffuseSamplerEnable, 1.0f);
             }
             else {
                 glActiveTexture(GL_TEXTURE0 + 0);
                 glBindTexture(GL_TEXTURE_2D, 0);
+                glUniform1f(location.uMaterialDiffuseSamplerEnable, 0.0f);
             }
             
             glUniform1i(location.uMaterialDiffuseSampler, 0);
