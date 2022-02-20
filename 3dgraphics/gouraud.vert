@@ -5,6 +5,8 @@ uniform mat4 uModel;
 uniform mat4 uView;
 uniform mat4 uProj;
 
+uniform sampler2D uMaterialDiffuseSampler;
+
 uniform vec4 uMaterialAmbient;
 uniform vec4 uMaterialDiffuse;
 uniform vec4 uMaterialSpecular;
@@ -15,6 +17,7 @@ uniform vec4 uLightDiffuse;
 
 in vec3 vertCoord;
 in vec3 vertNormal;
+in vec2 vertTexCoord;
 
 out vec4 fragColor;
 
@@ -31,8 +34,9 @@ void main() {
     float d = max(dot(uLightDirection, normal), 0.0);
 
     vec4 ambient = uMaterialAmbient * uLightAmbient;
-    vec4 diffuse = uMaterialDiffuse * uLightDiffuse * d;
+    vec4 diffuse = uMaterialDiffuse * texture(uMaterialDiffuseSampler, vertTexCoord) * uLightDiffuse * d;
 
-    fragColor = ambient + diffuse;
-    // fragColor = vec4(1.0, 1.0, 1.0, 1.0);
+    // fragColor = ambient + diffuse;
+    // fragColor = vec4(vertTexCoord, 1.0, 1.0) * d;
+    fragColor = texture(uMaterialDiffuseSampler, vertTexCoord);
 }

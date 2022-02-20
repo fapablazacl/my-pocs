@@ -9,8 +9,10 @@ project (3dgraphics)
 find_package(assimp REQUIRED)
 find_package(glfw3 REQUIRED)
 find_package(glm REQUIRED)
+find_package(DevIL REQUIRED)
 
 add_subdirectory(glad)
 
 add_executable(3dgraphics 3dgraphics.cpp)
-target_link_libraries(3dgraphics assimp::assimp glfw glm::glm glad)
+target_include_directories(3dgraphics PUBLIC ${IL_INCLUDE_DIR})
+target_link_libraries(3dgraphics assimp::assimp glfw glm::glm glad ${IL_LIBRARIES} ${ILU_LIBRARIES} ${ILUT_LIBRARIES})

@@ -2,6 +2,7 @@
 #include <iostream>
 #include <memory>
 #include <vector>
+#include <map>
 #include <fstream>
 #include <cassert>
 #include <array>
@@ -14,15 +15,160 @@
 #include <glm/vec4.hpp>
 #include <glm/mat4x4.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+
+#define ILUT_USE_OPENGL
+#include <il.h>
+#include <ilu.h>
+#include <ilut.h>
+
 #include <assimp/Importer.hpp>  // C++ importer interface
 #include <assimp/scene.h>       // Output data structure
 #include <assimp/postprocess.h> // Post processing flags
 
+inline std::string GLErrorToString(GLenum error) {
+    switch (error) {
+    case GL_NO_ERROR: return "GL_NO_ERROR";
+    case GL_INVALID_ENUM: return "GL_INVALID_ENUM";
+    case GL_INVALID_VALUE: return "GL_INVALID_VALUE";
+    case GL_INVALID_OPERATION: return "GL_INVALID_VALUE";
+    case GL_OUT_OF_MEMORY: return "GL_OUT_OF_MEMORY";
+    }
+    
+    return "<Unknown Error Value: " + std::to_string(error) + ">";
+}
+
+
+std::string parent_path(const std::string &str) {
+    return str.substr(0, str.find_last_of("/\\")) + "/";
+}
+
+
+std::string replace_all(const std::string &str, const std::string &search, const std::string &replace) {
+    std::string result = str;
+    
+    size_t pos = 0;
+    do {
+        pos = result.find(search);
+        
+        if (pos != std::string::npos) {
+            result.replace(pos, search.size(), replace);
+        }
+    }
+    while (pos != std::string::npos);
+    
+    return result;
+};
+
+
+std::vector<std::string> split(const std::string &str, const std::string &delimiter) {
+    std::string s = str;
+    std::vector<std::string> tokens;
+    
+    size_t pos = 0;
+    std::string token;
+    while ((pos = s.find(delimiter)) != std::string::npos) {
+        token = s.substr(0, pos);
+        
+        tokens.push_back(token);
+        
+        s.erase(0, pos + delimiter.length());
+    }
+    
+    tokens.push_back(s);
+    
+    return tokens;
+}
+
+
+std::string join(const std::vector<std::string> &elements, const std::string &delimiter) {
+    std::string str;
+    
+    for (size_t i = 0; i < elements.size(); i++) {
+        if (elements[i].empty()) {
+            continue;
+        }
+        
+        str += elements[i];
+        
+        if (i < elements.size() - 1) {
+            str += delimiter;
+        }
+    }
+    
+    return str;
+}
+
+
+std::string normalize_path(const std::string &str) {
+    std::string result = str;
+    
+    std::replace(result.begin(), result.end(), '\\', '/');
+    
+    return result;
+}
+
+
+bool can_be_opened(const std::string &filePath) {
+    std::fstream fs;
+    
+    fs.open(filePath.c_str(), std::ios::in);
+    
+    return fs.is_open();
+}
+
+
+#ifndef NDEBUG
+#   define M_Assert(Expr, Msg) \
+    __M_Assert(#Expr, Expr, __FILE__, __LINE__, Msg)
+#else
+#   define M_Assert(Expr, Msg) ;
+#endif
+
+void __M_Assert(const char* expr_str, bool expr, const char* file, int line, const char* msg)
+{
+    if (!expr)
+    {
+        std::cerr << "Assert failed:\t" << msg << "\n"
+            << "Expected:\t" << expr_str << "\n"
+            << "Source:\t\t" << file << ", line " << line << "\n";
+        abort();
+    }
+}
+
+struct GLErrorRAII {
+    GLErrorRAII(const char *file, const int line) : file(file), line(line) {
+        check();
+    }
+    
+    ~GLErrorRAII() {
+        check();
+    }
+    
+    void check() const {
+        const GLenum error = glGetError();
+        
+        if (error != GL_NO_ERROR) {
+            std::cerr
+                << "GL Error Detected:\t" << GLErrorToString(error) << "\n"
+                << "Source:\t\t" << file << ", line " << line << "\n";
+            
+            abort();
+        }
+    }
+    
+    const char *file;
+    const int line;
+};
+
+
+#define GL_SCOPED_ERROR_CHECK GLErrorRAII __gl_error_raii(__FILE__, __LINE__);
 
 struct Material {
     glm::vec4 ambient = {1.0f, 1.0f, 1.0f, 1.0f};
     glm::vec4 diffuse = {1.0f, 1.0f, 1.0f, 1.0f};
     glm::vec4 specular = {1.0f, 1.0f, 1.0f, 1.0f};
+    
+    GLuint diffuseTexture = 0;
 };
 
 
@@ -30,6 +176,112 @@ struct Light {
     glm::vec3 direction = glm::normalize(glm::vec3{0.5f, -1.0f, 0.25f});
     glm::vec4 ambient = {0.2f, 0.2f, 0.2f, 1.0f};
     glm::vec4 diffuse = {0.8f, 0.8f, 0.8f, 0.8f};
+};
+
+
+GLuint createTexture(GLenum internalFormat, const unsigned width, const unsigned height, const GLenum format, const GLenum type, const void *data) {
+    GL_SCOPED_ERROR_CHECK
+    
+    // Generate a new texture
+    GLuint texture = 0;
+    glGenTextures(1, &texture);
+     
+    // Bind the texture to a name
+    glBindTexture(GL_TEXTURE_2D, texture);
+    
+    glTexImage2D( GL_TEXTURE_2D, 0, internalFormat, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    
+    // Set texture clamping method
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    // Set texture interpolation method to use linear interpolation
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    
+    return texture;
+}
+
+
+class TextureRepository {
+public:
+    TextureRepository() {
+        ilInit();
+        iluInit();
+        ilutInit();
+    }
+    
+    GLuint getOrCreate(const std::string &filePath) {
+        if (filePath.empty()) {
+            return 0;
+        }
+        
+        if (auto it = cachedTextureMap.find(filePath); it != cachedTextureMap.end()) {
+            return it->second;
+        }
+        
+        GLuint texture = createTexture(filePath.c_str());
+        
+        if (! texture) {
+            return 0;
+        }
+        
+        std::cout << "Loaded texture " << filePath << std::endl;
+        
+        cachedTextureMap[filePath] = texture;
+        
+        return texture;
+    }
+    
+private:
+    GLuint createTexture(const char* theFileName) {
+        ILuint imageID;
+        
+        ilGenImages(1, &imageID);
+        ilBindImage(imageID);
+         
+        // If we managed to load the image, then we can start to do things with it...
+        if (! ilLoadImage(theFileName)) {
+            const ILenum error = ilGetError();
+            std::cout << "Image load failed: \"" << theFileName << "\" - IL reports error: " << error << " - " << iluErrorString(error) << std::endl;
+            
+            return 0;
+        }
+        
+        iluFlipImage();
+         
+        if (!ilConvertImage(IL_RGB, IL_UNSIGNED_BYTE)) {
+            ILenum error = ilGetError();
+            std::cout << "Image conversion failed: \"" << theFileName << "\" - IL reports error: " << error << " - " << iluErrorString(error) << std::endl;
+            
+            return 0;
+        }
+        
+        // Specify the texture specification
+        const ILint bpp = ilGetInteger(IL_IMAGE_BPP);
+        const ILint width = ilGetInteger(IL_IMAGE_WIDTH);
+        const ILint height = ilGetInteger(IL_IMAGE_HEIGHT);
+        const ILint format = ilGetInteger(IL_IMAGE_FORMAT);
+        const void* data = ilGetData();
+        
+        GLenum internalFormat = 0;
+
+        switch (bpp) {
+        case 3: internalFormat = GL_RGB; break;
+        case 4: internalFormat = GL_RGBA; break;
+        default: internalFormat = format;
+        }
+        
+        const GLuint texture = ::createTexture(internalFormat, width, height, format, GL_UNSIGNED_BYTE, data);
+        
+        ilDeleteImages(1, &imageID);
+        
+        return texture;
+    }
+    
+private:
+    std::map<std::string, GLuint> cachedTextureMap;
 };
 
 
@@ -114,7 +366,7 @@ GLuint createBuffer(const GLenum target, const ArrayLike &values, GLenum usage) 
 }
 
 
-Material createMaterial(const aiMaterial *aimaterial) {
+Material createMaterial(const std::string &parentPath, TextureRepository &textureRepository, const aiMaterial *aimaterial) {
     if (!aimaterial) {
         return {};
     }
@@ -134,29 +386,67 @@ Material createMaterial(const aiMaterial *aimaterial) {
     material.specular = glm::vec4{colorSpecular.r, colorSpecular.g, colorSpecular.b, 1.0f};
 
     // extract material textures
-    aiString diffuseTextureFilePath, specularTextureFilePath, heightTextureFilePath;
-    aimaterial->GetTexture(aiTextureType_DIFFUSE, 0, &diffuseTextureFilePath);
-    aimaterial->GetTexture(aiTextureType_SPECULAR, 0, &specularTextureFilePath);
-    aimaterial->GetTexture(aiTextureType_HEIGHT, 0, &heightTextureFilePath);
+    std::map<aiTextureType, std::string> textureMap {
+        { aiTextureType_AMBIENT, "" },
+        { aiTextureType_DIFFUSE, "" },
+        { aiTextureType_SPECULAR, "" },
+        { aiTextureType_AMBIENT, "" },
+        { aiTextureType_HEIGHT, "" },
+        { aiTextureType_EMISSIVE, "" },
+        { aiTextureType_NORMALS, "" },
+        { aiTextureType_SHININESS, "" },
+        { aiTextureType_OPACITY, "" },
+        { aiTextureType_DISPLACEMENT, "" },
+        { aiTextureType_LIGHTMAP, "" },
+        { aiTextureType_REFLECTION, "" },
+        { aiTextureType_BASE_COLOR, "" },
+        { aiTextureType_NORMAL_CAMERA, "" },
+        { aiTextureType_EMISSION_COLOR, "" },
+        { aiTextureType_METALNESS, "" },
+        { aiTextureType_DIFFUSE_ROUGHNESS, "" },
+        { aiTextureType_AMBIENT_OCCLUSION, "" },
+        { aiTextureType_UNKNOWN, "" },
+    };
     
     std::cout << aimaterial->GetName().C_Str() << std::endl;
-    std::cout << "    " << diffuseTextureFilePath.C_Str() << std::endl;
-    std::cout << "    " << diffuseTextureFilePath.C_Str() << std::endl;
-    std::cout << "    " << specularTextureFilePath.C_Str() << std::endl;
-    std::cout << "    " << heightTextureFilePath.C_Str() << std::endl;
+    for (auto &pair : textureMap) {
+        aiString fileName;
+        aimaterial->GetTexture(pair.first, 0, &fileName);
+        
+        if (fileName.length == 0) {
+            continue;
+        }
+        
+        std::string filePath = join(split(std::string{fileName.C_Str()}, "\\"), "/");
+        
+        if (! can_be_opened(filePath)) {
+            std::string textureFilePath = filePath;
+            std::string textureParentPath = parent_path(filePath);
+            
+            filePath = replace_all(filePath, parent_path(filePath), parentPath);
+        }
+        
+        assert(can_be_opened(filePath));
+        
+        pair.second = filePath;
+        
+        std::cout << "    " << pair.first << " = " << fileName.C_Str() << " -> " << filePath << std::endl;
+        // const std::string filePath = parentPath + file;
+    }
     
-    // TODO: perform texture loader via a texture manager
+    material.diffuseTexture = textureRepository.getOrCreate(textureMap[aiTextureType_DIFFUSE]);
     
     return material;
 }
 
-std::vector<Material> createMaterialArray(const aiScene *aiscene) {
+
+std::vector<Material> createMaterialArray(const std::string &parentPath, TextureRepository &textureRepository, const aiScene *aiscene) {
     std::vector<Material> materials;
     
     materials.resize(aiscene->mNumMaterials);
     
     for (unsigned int i=0; i<aiscene->mNumMaterials; i++) {
-        materials[i] = createMaterial(aiscene->mMaterials[i]);
+        materials[i] = createMaterial(parentPath, textureRepository, aiscene->mMaterials[i]);
     }
     
     return materials;
@@ -166,11 +456,13 @@ std::vector<Material> createMaterialArray(const aiScene *aiscene) {
 struct ShaderLocationMap {
     GLint coord = -1;
     GLint normal = -1;
+    GLint texCoord = -1;
     
     GLint uModel = -1;
     GLint uView = -1;
     GLint uProj = -1;
     
+    GLint uMaterialDiffuseSampler = -1;
     GLint uMaterialAmbient = -1;
     GLint uMaterialDiffuse = -1;
     GLint uMaterialSpecular = -1;
@@ -189,11 +481,13 @@ ShaderLocationMap createShaderLocationMap(const GLuint program) {
     
     location.coord = glGetAttribLocation(program, "vertCoord");
     location.normal = glGetAttribLocation(program, "vertNormal");
+    location.texCoord = glGetAttribLocation(program, "vertTexCoord");
     
     location.uModel = glGetUniformLocation(program, "uModel");
     location.uView = glGetUniformLocation(program, "uView");
     location.uProj = glGetUniformLocation(program, "uProj");
     
+    location.uMaterialDiffuseSampler = glGetUniformLocation(program, "uMaterialDiffuseSampler");
     location.uMaterialAmbient = glGetUniformLocation(program, "uMaterialAmbient");
     location.uMaterialDiffuse = glGetUniformLocation(program, "uMaterialDiffuse");
     location.uMaterialSpecular = glGetUniformLocation(program, "uMaterialSpecular");
@@ -239,11 +533,27 @@ Mesh createMeshVAO(const ShaderLocationMap &location, const aiMesh *mesh) {
         normalBuffer = createBuffer(GL_ARRAY_BUFFER, mesh->mNumVertices * sizeof(aiVector3D), mesh->mNormals, GL_STATIC_DRAW);
     }
     
+    GLuint texCoordBuffer = 0;
+    if (mesh->mTextureCoords[0]) {
+        assert(mesh->mNumUVComponents[0] == 2);
+        
+        std::vector<glm::vec2> texCoords;
+        texCoords.resize(mesh->mNumVertices);
+        
+        for (int i = 0; i < texCoords.size(); i++) {
+            const auto &tc = mesh->mTextureCoords[0][i];
+            
+            texCoords[i] = glm::vec2{tc.x, tc.y};
+        }
+        
+        texCoordBuffer = createBuffer(GL_ARRAY_BUFFER, texCoords, GL_STATIC_DRAW);
+    }
+    
     GLuint indexBuffer = 0;
     if (mesh->HasFaces()) {
-        // perform a little post-processing for the mesh indexing
-        // merge all triangle-shaped faces into a single index array
         std::vector<unsigned int> indices;
+        
+        indices.reserve(mesh->mNumFaces);
         
         for (unsigned int j=0; j<mesh->mNumFaces; j++) {
             const aiFace &face = mesh->mFaces[j];
@@ -283,6 +593,14 @@ Mesh createMeshVAO(const ShaderLocationMap &location, const aiMesh *mesh) {
         glVertexAttribPointer(location.normal, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
     }
     
+    if (texCoordBuffer) {
+        assert(location.texCoord >= 0);
+        
+        glEnableVertexAttribArray(location.texCoord);
+        glBindBuffer(GL_ARRAY_BUFFER, texCoordBuffer);
+        glVertexAttribPointer(location.texCoord, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+    }
+    
     if (indexBuffer) {
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBuffer);
     }
@@ -309,58 +627,6 @@ std::vector<Mesh> createMeshArray(const ShaderLocationMap &location, const aiSce
     
     return meshes;
 }
-
-
-//GLuint createTriangleMeshVAO(const GLuint program) {
-//    assert(program);
-//
-//    const std::vector<glm::vec3> vertices {
-//        glm::vec3{0.0f, 1.0f, 0.0f},
-//        glm::vec3{1.0f, -1.0f, 0.0f},
-//        glm::vec3{-1.0f, -1.0f, 0.0f},
-//    };
-//
-//    const std::vector<glm::vec4> colors {
-//        glm::vec4{1.0f, 0.0f, 0.0f, 1.0f},
-//        glm::vec4{0.0f, 1.0f, 0.0f, 1.0f},
-//        glm::vec4{0.0f, 0.0f, 1.0f, 1.0f},
-//    };
-//
-//    const GLuint coordBuffer = createBuffer(GL_ARRAY_BUFFER, vertices, GL_STATIC_DRAW);
-//
-//    const GLuint colorBuffer = createBuffer(
-//        GL_ARRAY_BUFFER,
-//        sizeof(glm::vec4) * colors.size(),
-//        colors.data(), GL_STATIC_DRAW
-//    );
-//
-//    assert(coordBuffer);
-//
-//    GLuint vao = 0;
-//
-//    glGenVertexArrays(1, &vao);
-//    glBindVertexArray(vao);
-//
-//    const GLint vertCoord = glGetAttribLocation(program, "vertCoord");
-//    assert(vertCoord >= 0);
-//
-//    const GLint vertColor = glGetAttribLocation(program, "vertColor");
-//    assert(vertColor >= 0);
-//
-//    glEnableVertexAttribArray(vertCoord);
-//    glBindBuffer(GL_ARRAY_BUFFER, coordBuffer);
-//    glVertexAttribPointer(vertCoord, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
-//
-//    glEnableVertexAttribArray(vertColor);
-//    glBindBuffer(GL_ARRAY_BUFFER, colorBuffer);
-//    glVertexAttribPointer(vertColor, 4, GL_FLOAT, GL_FALSE, 0, nullptr);
-//
-//    glBindVertexArray(0);
-//
-//    assert(glGetError() == GL_NO_ERROR);
-//
-//    return vao;
-//}
 
 
 std::string loadTextFile(const std::string &file) {
@@ -395,7 +661,39 @@ GLuint createProgram(const std::string &vertFile, const std::string &fragFile) {
 }
 
 
+std::vector<GLuint> createTextureArray(const aiScene* scene, const std::string& pModelPath) {
+    if(!scene || !scene->HasTextures()) {
+        return {};
+    }
+    
+    std::vector<GLuint> textures;
+    textures.resize(scene->mNumTextures);
+    
+    glGenTextures(scene->mNumTextures, textures.data());
+    
+    for(size_t ti = 0; ti < scene->mNumTextures; ti++) {
+        glBindTexture(GL_TEXTURE_2D, textures[ti]);
+        
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (scene->mTextures[ti]->achFormatHint[0] & 0x01) ? GL_REPEAT : GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (scene->mTextures[ti]->achFormatHint[0] & 0x01) ? GL_REPEAT : GL_CLAMP_TO_EDGE);
+        
+        const unsigned width = scene->mTextures[ti]->mWidth;
+        const unsigned height = scene->mTextures[ti]->mHeight;
+        const void *data = scene->mTextures[ti]->pcData;
+        
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_BGRA, GL_UNSIGNED_BYTE, data);
+    }
+    
+    return textures;
+}
+
+
 int main(int argc, char **argv) {
+    TextureRepository textureRepository;
+    
     // Create an instance of the Importer class
     Assimp::Importer importer;
     // And have it read the given file with some example postprocessing
@@ -403,11 +701,14 @@ int main(int argc, char **argv) {
     // propably to request more postprocessing than we do in this example.
     const auto flags =  aiProcess_Triangulate |
                         aiProcess_JoinIdenticalVertices |
+                        aiProcess_GenNormals |
                         // aiProcess_CalcTangentSpace |
                         // aiProcess_SortByPType |
                         aiProcess_ValidateDataStructure;
 
-    const aiScene *scene = importer.ReadFile(argv[1], flags);
+    const std::string sceneFilePath = argv[1];
+    const std::string sceneFileParentPath = parent_path(sceneFilePath);
+    const aiScene *scene = importer.ReadFile(sceneFilePath, flags);
 
     // If the import failed, report it
     if (!scene) {
@@ -481,16 +782,15 @@ int main(int argc, char **argv) {
     
     const ShaderLocationMap location = createShaderLocationMap(program);
     const std::vector<Mesh> meshes = createMeshArray(location, scene);
+    const std::vector<GLuint> textures = createTextureArray(scene, "");
 
-    const std::vector<Material> materials = createMaterialArray(scene);
+    const std::vector<Material> materials = createMaterialArray(sceneFileParentPath, textureRepository, scene);
     const Light light;
     
     bool running = true;
 
     glm::vec3 playerPosition = {0.0f, 0.0f, 10.0f};
     float angle = 0.0f;
-    
-    
     
     while (running) {
         glfwPollEvents();
@@ -513,14 +813,16 @@ int main(int argc, char **argv) {
         const glm::vec3 playerDirection = rotationY * glm::vec4{0.0f, 0.0f, -1.0f, 0.0f};
 
         // compute player movement
-        if (glfwGetKey(window, GLFW_KEY_UP)) {
-            playerPosition += 0.075f * playerDirection;
-        }
-        else if (glfwGetKey(window, GLFW_KEY_DOWN)) {
-            playerPosition -= 0.075f * playerDirection;
+        if (! (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS)) {
+            if (glfwGetKey(window, GLFW_KEY_UP)) {
+                playerPosition += 0.075f * playerDirection;
+            }
+            else if (glfwGetKey(window, GLFW_KEY_DOWN)) {
+                playerPosition -= 0.075f * playerDirection;
+            }
         }
         
-        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+        glClearColor(0.1f, 0.1f, 0.6f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         glEnable(GL_DEPTH_TEST);
@@ -556,6 +858,17 @@ int main(int argc, char **argv) {
             glUniform4fv(location.uMaterialAmbient, 1, glm::value_ptr(material.ambient));
             glUniform4fv(location.uMaterialDiffuse, 1, glm::value_ptr(material.diffuse));
             glUniform4fv(location.uMaterialSpecular, 1, glm::value_ptr(material.specular));
+            
+            if (material.diffuseTexture) {
+                glActiveTexture(GL_TEXTURE0 + 0);
+                glBindTexture(GL_TEXTURE_2D, material.diffuseTexture);
+            }
+            else {
+                glActiveTexture(GL_TEXTURE0 + 0);
+                glBindTexture(GL_TEXTURE_2D, 0);
+            }
+            
+            glUniform1i(location.uMaterialDiffuseSampler, 0);
             
             // render the mesh
             glBindVertexArray(mesh.vao);
