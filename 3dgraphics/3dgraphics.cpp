@@ -620,6 +620,91 @@ Mesh createMeshVAO(const ShaderLocationMap &location, const aiMesh *mesh) {
 }
 
 
+class Scene {
+public:
+    explicit Scene(const aiScene *aiscene) {
+        visitNode(aiscene->mRootNode);
+    }
+    
+    std::vector<const aiNode*> getNodes() const {
+        return nodes;
+    }
+    
+private:
+    void visitNode(const aiNode *node) {
+        if (! node) {
+            return;
+        }
+        
+        if (node->mNumMeshes > 0) {
+            nodes.push_back(node);
+        }
+        
+        for (int i = 0; i < node->mNumChildren; i++) {
+            visitNode(node->mChildren[i]);
+        }
+    }
+    
+private:
+    // nodes that have meshes
+    std::vector<const aiNode*> nodes;
+};
+
+
+inline static glm::mat4 Assimp2Glm(const aiMatrix4x4& from) {
+    return glm::mat4 (
+        (double)from.a1, (double)from.b1, (double)from.c1, (double)from.d1,
+        (double)from.a2, (double)from.b2, (double)from.c2, (double)from.d2,
+        (double)from.a3, (double)from.b3, (double)from.c3, (double)from.d3,
+        (double)from.a4, (double)from.b4, (double)from.c4, (double)from.d4
+    );
+}
+
+
+inline static aiMatrix4x4 Glm2Assimp(const glm::mat4& from) {
+    return aiMatrix4x4(
+        from[0][0], from[1][0], from[2][0], from[3][0],
+        from[0][1], from[1][1], from[2][1], from[3][1],
+        from[0][2], from[1][2], from[2][2], from[3][2],
+        from[0][3], from[1][3], from[2][3], from[3][3]
+    );
+}
+
+
+glm::mat4 computeNodeTransformation(const aiNode* node) {
+    glm::mat4 transformation = glm::identity<glm::mat4>();
+    
+    while (node != nullptr) {
+        transformation = Assimp2Glm(node->mTransformation) * transformation;
+        
+        node = node->mParent;
+    }
+    
+    return transformation;
+}
+
+
+void visitNode(int level, const aiNode *node) {
+    if (! node) {
+        return;
+    }
+    
+    for (int i = 0; i < level; i++) {
+        std::cout << "  ";
+    }
+    
+    std::cout << "Name: " <<  node->mName.C_Str() << ", ";
+    std::cout << "Mesh Count:" <<  node->mNumMeshes;
+    std::cout << std::endl;
+    
+    std::cout << &node->mTransformation << std::endl;
+    
+    for (int i = 0; i < node->mNumChildren; i++) {
+        visitNode(level + 1, node->mChildren[i]);
+    }
+}
+
+
 std::vector<Mesh> createMeshArray(const ShaderLocationMap &location, const aiScene *aiscene) {
     if (!aiscene) {
         return {};
@@ -730,6 +815,8 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
+    Scene sceneNodes {scene};
+    
     for (int i = 0; i<scene->mNumMeshes; i++) {
         std::cout << "Mesh: " << scene->mMeshes[i]->mName.C_Str() << std::endl;
     }
@@ -780,7 +867,7 @@ int main(int argc, char **argv) {
     glfwMakeContextCurrent(window);
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
-        std::cout << "Failed to initialize GLAD" << std::endl;
+        std::cout << "Failed to initialize extensions (via GLAD)" << std::endl;
         return EXIT_FAILURE;
     }
 
@@ -848,44 +935,50 @@ int main(int argc, char **argv) {
             playerPosition + playerDirection,
             glm::vec3{0.0f, 1.0f, 0.0f});
 
-        const glm::mat4 model = glm::identity<glm::mat4>();
-        
         glUniformMatrix4fv(location.uProj, 1, GL_FALSE, glm::value_ptr(proj));
         glUniformMatrix4fv(location.uView, 1, GL_FALSE, glm::value_ptr(view));
-        glUniformMatrix4fv(location.uModel, 1, GL_FALSE, glm::value_ptr(model));
         
         // setup lighting
         glUniform3fv(location.uLightDirection, 1, glm::value_ptr(light.direction));
         glUniform4fv(location.uLightAmbient, 1, glm::value_ptr(light.ambient));
         glUniform4fv(location.uLightDiffuse, 1, glm::value_ptr(light.diffuse));
         
-        for (const Mesh &mesh : meshes) {
-            const Material material = mesh.material >= 0 ? materials[mesh.material] : Material{};
+        for (const aiNode *node : sceneNodes.getNodes()) {
+            assert(node);
             
-            glUniform4fv(location.uMaterialAmbient, 1, glm::value_ptr(material.ambient));
-            glUniform4fv(location.uMaterialDiffuse, 1, glm::value_ptr(material.diffuse));
-            glUniform4fv(location.uMaterialSpecular, 1, glm::value_ptr(material.specular));
+            const glm::mat4 model = computeNodeTransformation(node);
             
-            if (material.diffuseTexture) {
-                glActiveTexture(GL_TEXTURE0 + 0);
-                glBindTexture(GL_TEXTURE_2D, material.diffuseTexture);
-                glUniform1f(location.uMaterialDiffuseSamplerEnable, 1.0f);
-            }
-            else {
-                glActiveTexture(GL_TEXTURE0 + 0);
-                glBindTexture(GL_TEXTURE_2D, 0);
-                glUniform1f(location.uMaterialDiffuseSamplerEnable, 0.0f);
-            }
+            glUniformMatrix4fv(location.uModel, 1, GL_FALSE, glm::value_ptr(model));
             
-            glUniform1i(location.uMaterialDiffuseSampler, 0);
-            
-            // render the mesh
-            glBindVertexArray(mesh.vao);
-            if (mesh.indexed) {
-                glDrawElements(mesh.primitiveType, mesh.count, mesh.indexDataType, nullptr);
-            }
-            else {
-                glDrawArrays(mesh.primitiveType, 0, mesh.count);
+            for (unsigned int i = 0; i < node->mNumMeshes; i++) {
+                const unsigned int meshIndex = node->mMeshes[i];
+                const Mesh &mesh = meshes[meshIndex];
+                const Material material = mesh.material >= 0 ? materials[mesh.material] : Material{};
+                
+                glUniform4fv(location.uMaterialAmbient, 1, glm::value_ptr(material.ambient));
+                glUniform4fv(location.uMaterialDiffuse, 1, glm::value_ptr(material.diffuse));
+                glUniform4fv(location.uMaterialSpecular, 1, glm::value_ptr(material.specular));
+                
+                if (material.diffuseTexture) {
+                    glActiveTexture(GL_TEXTURE0 + 0);
+                    glBindTexture(GL_TEXTURE_2D, material.diffuseTexture);
+                    glUniform1f(location.uMaterialDiffuseSamplerEnable, 1.0f);
+                    glUniform1i(location.uMaterialDiffuseSampler, 0);
+                }
+                else {
+                    glActiveTexture(GL_TEXTURE0 + 0);
+                    glBindTexture(GL_TEXTURE_2D, 0);
+                    glUniform1f(location.uMaterialDiffuseSamplerEnable, 0.0f);
+                }
+                
+                // render the mesh
+                glBindVertexArray(mesh.vao);
+                if (mesh.indexed) {
+                    glDrawElements(mesh.primitiveType, mesh.count, mesh.indexDataType, nullptr);
+                }
+                else {
+                    glDrawArrays(mesh.primitiveType, 0, mesh.count);
+                }
             }
         }
         
