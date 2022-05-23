@@ -8,3 +8,4 @@ set (target "sdl2-helloworld")
 set (sources "main.cpp")
 
 add_executable(${target} ${sources})
+target_link_libraries(${target} PRIVATE SDL2::SDL2)
