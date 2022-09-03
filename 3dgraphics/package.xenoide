@@ -1,0 +1,8 @@
+name: 3dgraphics
+author: Felipe Apablaza
+license: MIT
+version: "1.0.0"
+buildsystem: 
+  cmake:
+    build-folder: build
+    build-configurations: ["Debug", "Release"]
